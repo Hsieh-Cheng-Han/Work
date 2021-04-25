@@ -1,0 +1,167 @@
+---
+title: "t_test_Mann_Whiteney"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+
+library(tidyverse)
+library(readxl)
+library(dplyr)
+library(rJava)
+library(xlsx)
+
+# 讀取資料(讀取成變數data)
+data <- read_excel("~/Desktop/bebit/TLC/抽樣資料(0618).xlsx")
+```
+
+```{r setup, include=FALSE}
+data <- as.data.frame(data)
+# brand_name設置
+data[,c("brand_name")] <- NA
+for(i in 1:nrow(data)){
+    if(startsWith(data$Q2_1[i], "小")){
+        data$brand_name[i] <- c("mi")
+    }
+    if(data$Q2_1[i] %in% c("S7E","U8AC","U7E","U8E","E8A","E7D","E60D","U9E","E8D","A65E","A68E","A56E","U7A","S7","E5D","A52","A66E","A67E","T5D","E52A","E52D","A57E","E5A","E3D-PRO")){
+        data$brand_name[i] <- c("hs")
+    }
+    if(data$Q2_1[i] %in% c("X10","X9","C10","C6S","Q9","C7","X5","X8","C8","C3","C66","Q6","P8","P9","C68","Q8","D10","V6","V6M","D8","T6","T6M","D6")){
+        data$brand_name[i] <- c("tcl")
+    }
+}
+
+# 確保無缺值
+if(sum(is.na(data$brand_name)) != 0){
+    print("There is brand name error. Please check.")
+}
+
+# 常態性檢驗
+normality_check <- function(test_seq){
+        # 非常態分佈
+    if(shapiro.test(test_seq)$p.value < 0.05){
+        return(FALSE)
+    }else{
+        # 常態分佈
+        return(TRUE)
+    }
+}
+
+# 假設檢定適合
+test_type_choose <- function(normality_1, normality_2){
+    if(normality_1 & normality_2){
+        return("T")
+    }else{
+        return("M")
+    }
+}
+
+# t-test
+t_test <- function(test_seq_1, test_seq_2){
+    # 母體變異數相等
+    var_qual = var.test(test_seq_1, test_seq_2)$p.value > 0.05
+    if(mean(test_seq_1) > mean(test_seq_2)){
+        return(t.test(test_seq_1, test_seq_2, alternative = "g", var.equal = var_qual)$p.value)
+    }else{
+        return(t.test(test_seq_1, test_seq_2, alternative = "l", var.equal = var_qual)$p.value)
+    }
+}
+
+# Mann_Whiteney檢定
+u_test <- function(test_seq_1, test_seq_2){
+    # 母體變異數相等
+    if(mean(test_seq_1) > mean(test_seq_2)){
+        return(wilcox.test(test_seq_1, test_seq_2, alternative = "g")$p.value)
+    }else{
+        return(wilcox.test(test_seq_1, test_seq_2, alternative = "l")$p.value)
+    }
+}
+
+significant <- function(p_value, threshold = c(0.1,0.05)){
+    if(p_value > threshold[1]){
+        return("NO")
+    }else{
+        if(p_value > threshold[2]){
+            return("Slightly Significant")
+        }else{
+            return("Significant")
+        }
+    }
+}
+
+# 定義整體函數
+test_summary <- function(data, col_name, feature_name = "Modeltype"){
+
+test_data <- data
+test_data <- test_data[,c(feature_name,col_name)]
+
+# 如果不是nps刪去9分
+if(!col_name %in% c("nps","nps_product","nps_product_comment")){
+    test_data <- test_data[test_data[,col_name] != 9,]
+}
+# 升冪排序
+test_data <- test_data[sort.list(test_data[feature_name]),]
+# feature種類
+feature_values <- pull(unique(test_data[feature_name]), feature_name)
+# 將每種feature值取出成為一個list
+test_data_feature_list <- vector(mode = "list", length(feature_values))
+for(i in 1:length(feature_values)){
+    test_data_feature_list[[i]] <- pull(test_data[test_data[feature_name] == feature_values[i],][col_name], col_name)
+}
+
+
+number_each <- as.vector(table(test_data[feature_name]))
+nps_mean <- pull(as.data.frame(aggregate(test_data[col_name], list(pull(test_data,feature_name)), mean)), col_name)
+
+# 兩兩檢定
+pair_number = length(feature_values)*(length(feature_values) - 1)/2
+test_pair <- vector("numeric", pair_number)
+test_pair_p_value <- vector("numeric", pair_number)
+test_pair_significance <- vector("character", pair_number)
+count <- 0
+for(i in 1:(length(feature_values)-1)){
+    for(j in (i+1):length(feature_values)){
+        count <- count + 1
+        first_value <- feature_values[i]
+        second_value <- feature_values[j]
+        test_pair[count] <- paste(as.character(first_value), "_", as.character(second_value), sep="")
+        test_pair_p_value[count] <- u_test(test_data_feature_list[[i]], test_data_feature_list[[j]])
+        test_pair_significance[count] <- significant(test_pair_p_value[count])
+    }
+}
+
+summary_data <- as.data.frame(matrix(NA, nrow = max(length(test_pair),pair_number), ncol = 6))
+summary_data[1:length(feature_values),1] <- feature_values
+summary_data[1:length(feature_values),2] <- number_each
+summary_data[1:length(feature_values),3] <- nps_mean
+summary_data[1:pair_number,4:6] <- cbind(test_pair, test_pair_p_value, test_pair_significance)
+colnames(summary_data) <- c("feature_values","sample number","nps_mean","pair_name","p_value","significance")
+
+return(summary_data)
+}
+
+```
+
+```{r setup, include=FALSE}
+# 檔案名稱(可改)
+file_name = "result.xlsx"
+
+
+for(i in 1:nrow(data)){
+    if(data$channel[i] != 3){
+        data$new_channel[i] <- 12 
+    }else{
+        data$new_channel[i] <- 3 
+    }
+}
+
+# 切人口特徵
+count <- 0
+for(feature_name in c("Modeltype","gender","area","tier","age","family","lifetime","new_channel")){
+    count <- count + 1
+    feature_summary <- test_summary(data, "nps_product", feature_name)
+    write.xlsx(feature_summary, file=file_name, sheetName = feature_name, append = (count != 1), row.names=FALSE, showNA = FALSE)
+}
+
+
+```
